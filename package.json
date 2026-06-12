@@ -1,0 +1,25 @@
+{
+  "name": "music-player",
+  "version": "1.0.0",
+  "description": "Modern Spotify-inspired desktop music player",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "web": "node server.js"
+  },
+  "keywords": [
+    "music",
+    "player",
+    "electron",
+    "spotify"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "canvas": "^3.2.3",
+    "electron": "^28.0.0"
+  },
+  "dependencies": {
+    "music-metadata": "^11.13.0"
+  }
+}

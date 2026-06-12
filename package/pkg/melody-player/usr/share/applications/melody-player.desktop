@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Melody
+Comment=Modern Spotify-inspired music player
+Exec=melody-player %U
+Icon=melody-player
+Terminal=false
+Type=Application
+Categories=Audio;Music;Player;
+MimeType=audio/mpeg;audio/x-wav;audio/ogg;audio/flac;audio/x-vorbis+ogg;audio/x-flac;
+StartupWMClass=Melody
