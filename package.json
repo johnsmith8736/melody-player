@@ -1,6 +1,6 @@
 {
   "name": "melody-player",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Modern Spotify-inspired desktop music player",
   "homepage": "https://github.com/johnsmith8736/melody-player",
   "main": "main.js",
