@@ -29,12 +29,42 @@ function createWindow() {
   mainWindow.on('closed', () => mainWindow = null);
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  // Ensure playlist/ directory exists on startup
+  try {
+    const dir = path.join(__dirname, 'playlist');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    console.log('Playlist directory:', dir);
+  } catch (e) { console.warn('Failed to create playlist dir:', e); }
+  createWindow();
+});
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();
+});
+
+// Forward renderer logs to terminal (for debugging)
+ipcMain.on('renderer-log', (event, level, message) => {
+  const prefix = '[renderer]';
+  if (level === 'warn') console.warn(prefix, message);
+  else if (level === 'error') console.error(prefix, message);
+  else console.log(prefix, message);
+});
+
+// Debug: test file read
+ipcMain.handle('debug-read-file', async (event, filePath) => {
+  try {
+    const stat = fs.statSync(filePath);
+    console.log('DEBUG file:', filePath, 'size:', stat.size, 'isFile:', stat.isFile());
+    const buf = fs.readFileSync(filePath);
+    console.log('DEBUG read:', buf.length, 'bytes');
+    return { size: buf.length, ok: true };
+  } catch (e) {
+    console.error('DEBUG read failed:', filePath, e.message);
+    return { ok: false, error: e.message };
+  }
 });
 
 ipcMain.on('minimize', () => mainWindow.minimize());
@@ -47,7 +77,7 @@ ipcMain.on('close', () => {
 
 // Open file dialog to select music files
 ipcMain.handle('select-music-files', async () => {
-  const result = await dialog.showOpenDialog(mainWindow, {
+  const result = await dialog.showOpenDialog({
     properties: ['openFile', 'multiSelections'],
     filters: [
       { name: 'Audio Files', extensions: ['mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac', 'wma', 'opus'] },
@@ -57,18 +87,62 @@ ipcMain.handle('select-music-files', async () => {
   return result.filePaths;
 });
 
+// Recursively walk a directory and collect audio files (handles permission errors)
+async function walkDir(dir, audioExts) {
+  const results = [];
+  let entries;
+  try {
+    entries = await fs.promises.readdir(dir, { withFileTypes: true });
+  } catch (err) {
+    console.warn('Cannot read dir:', dir, err.message);
+    return results;
+  }
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      // Skip hidden dirs and common non-music dirs
+      if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
+      results.push(...await walkDir(fullPath, audioExts));
+    } else if (entry.isFile()) {
+      if (audioExts.includes(path.extname(entry.name).toLowerCase())) {
+        results.push(fullPath);
+      }
+    }
+  }
+  return results;
+}
+
 // Open folder dialog and return all audio files inside
-ipcMain.handle('select-music-folder', async () => {
-  const result = await dialog.showOpenDialog(mainWindow, {
-    properties: ['openDirectory']
-  });
-  if (result.canceled || result.filePaths.length === 0) return [];
+ipcMain.handle('select-music-folder', async (event) => {
+  console.log('[main] select-music-folder handler invoked');
+  const win = BrowserWindow.fromWebContents(event.sender);
+  console.log('[main] sender window:', !!win);
+  let result;
+  try {
+    result = await dialog.showOpenDialog(win || mainWindow, {
+      properties: ['openDirectory']
+    });
+    console.log('[main] dialog result:', JSON.stringify(result));
+  } catch (e) {
+    console.error('[main] dialog.showOpenDialog failed:', e.message);
+    return [];
+  }
+  if (result.canceled || result.filePaths.length === 0) {
+    console.log('[main] dialog canceled or no selection');
+    return [];
+  }
   const folderPath = result.filePaths[0];
   const audioExts = ['.mp3', '.wav', '.ogg', '.flac', '.m4a', '.aac', '.wma', '.opus'];
-  const files = await fs.promises.readdir(folderPath, { recursive: true });
-  return files
-    .filter(f => audioExts.includes(path.extname(f).toLowerCase()))
-    .map(f => path.join(folderPath, f));
+  console.log('[main] Scanning folder:', folderPath);
+  let files;
+  try {
+    files = await walkDir(folderPath, audioExts);
+  } catch (e) {
+    console.error('[main] walkDir failed:', e.message);
+    return [];
+  }
+  console.log('[main] Folder scan result:', files.length, 'files');
+  return files;
 });
 
 // Read file as ArrayBuffer for efficient transfer (no base64 bloat)
@@ -97,6 +171,107 @@ ipcMain.handle('read-file-as-data-url', async (event, filePath) => {
     return `data:${mime};base64,${base64}`;
   } catch (err) {
     console.error('Failed to read file:', filePath, err.message);
+    return null;
+  }
+});
+
+// Get the playlist storage directory (next to the app)
+function getPlaylistDir() {
+  const appDir = app.getAppPath ? app.getAppPath() : __dirname;
+  return path.join(appDir, 'playlist');
+}
+
+// Ensure playlist directory exists
+function ensurePlaylistDir() {
+  const dir = getPlaylistDir();
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+// Save a playlist JSON file to playlist/ directory
+ipcMain.handle('save-playlist', async (event, fileName, playlistData) => {
+  try {
+    const dir = ensurePlaylistDir();
+    const filePath = path.join(dir, fileName);
+    // playlistData may be a JSON string or object
+    const data = typeof playlistData === 'string' ? playlistData : JSON.stringify(playlistData, null, 2);
+    fs.writeFileSync(filePath, data, 'utf-8');
+    console.log('Playlist saved:', filePath);
+    return { success: true };
+  } catch (err) {
+    console.error('Failed to save playlist:', fileName, err.message);
+    return { success: false, error: err.message };
+  }
+});
+
+// Load a playlist JSON file from playlist/ directory
+ipcMain.handle('load-playlist', async (event, fileName) => {
+  try {
+    const dir = ensurePlaylistDir();
+    const filePath = path.join(dir, fileName);
+    if (!fs.existsSync(filePath)) return null;
+    const raw = fs.readFileSync(filePath, 'utf-8');
+    return JSON.parse(raw);
+  } catch (err) {
+    console.error('Failed to load playlist:', fileName, err.message);
+    return null;
+  }
+});
+
+// List all playlist files in playlist/ directory
+ipcMain.handle('list-playlists', async () => {
+  try {
+    const dir = ensurePlaylistDir();
+    const files = await fs.promises.readdir(dir);
+    return files.filter(f => f.endsWith('.json'));
+  } catch (err) {
+    console.error('Failed to list playlists:', err.message);
+    return [];
+  }
+});
+
+// Delete a playlist file from playlist/ directory
+ipcMain.handle('delete-playlist', async (event, fileName) => {
+  try {
+    const dir = ensurePlaylistDir();
+    const filePath = path.join(dir, fileName);
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    return { success: true };
+  } catch (err) {
+    console.error('Failed to delete playlist:', fileName, err.message);
+    return { success: false, error: err.message };
+  }
+});
+
+// Get the state file path (next to the app, in a writable location)
+function getStateFilePath() {
+  const appDir = app.getAppPath ? app.getAppPath() : __dirname;
+  return path.join(appDir, 'state.json');
+}
+
+// Save state JSON to file (avoids Electron localStorage null-byte corruption)
+ipcMain.handle('save-state-file', async (event, jsonStr) => {
+  try {
+    const filePath = getStateFilePath();
+    fs.writeFileSync(filePath, jsonStr, 'utf-8');
+    console.log('[main] State saved to:', filePath, 'size:', jsonStr.length);
+    return { success: true };
+  } catch (err) {
+    console.error('[main] Failed to save state file:', err.message);
+    return { success: false, error: err.message };
+  }
+});
+
+// Load state JSON from file
+ipcMain.handle('load-state-file', async () => {
+  try {
+    const filePath = getStateFilePath();
+    if (!fs.existsSync(filePath)) return null;
+    const raw = fs.readFileSync(filePath, 'utf-8');
+    console.log('[main] State loaded from:', filePath, 'size:', raw.length);
+    return JSON.parse(raw);
+  } catch (err) {
+    console.error('[main] Failed to load state file:', err.message);
     return null;
   }
 });
