@@ -175,6 +175,35 @@ ipcMain.handle('read-file-as-data-url', async (event, filePath) => {
   }
 });
 
+// Batch add: parse metadata for multiple files in one IPC call (much faster)
+ipcMain.handle('batch-parse-metadata', async (event, filePaths) => {
+  const results = [];
+  for (const filePath of filePaths) {
+    try {
+      const mm = require('music-metadata');
+      const meta = await mm.parseFile(filePath);
+      const picture = meta.common.picture?.[0];
+      let coverDataUrl = null;
+      if (picture) {
+        const base64 = picture.data.toString('base64');
+        coverDataUrl = `data:${picture.format};base64,${base64}`;
+      }
+      results.push({
+        ok: true,
+        filePath,
+        title: meta.common.title || path.basename(filePath, path.extname(filePath)),
+        artist: meta.common.artist || 'Unknown Artist',
+        album: meta.common.album || 'Unknown Album',
+        duration: meta.format.duration || 0,
+        cover: coverDataUrl,
+      });
+    } catch (err) {
+      results.push({ ok: false, filePath, error: err.message });
+    }
+  }
+  return results;
+});
+
 // Get the playlist storage directory (next to the app)
 function getPlaylistDir() {
   const appDir = app.getAppPath ? app.getAppPath() : __dirname;

@@ -1056,64 +1056,47 @@ async function addMusicFiles(filePaths) {
   showToast(`Added ${added} song${added === 1 ? '' : 's'}`);
 }
 
-// Electron: use IPC — read as data URL so it persists across restarts
+// Electron: batch-parse metadata (no base64 read — much faster)
 async function addMusicFilesElectron(filePaths) {
   if (!filePaths || filePaths.length === 0) return;
 
   const btn = els.addSongsBtn;
   btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i><span class="nav-text">Adding...</span>';
 
-  // Use direct require when available (nodeIntegration mode)
   const electron = typeof require !== 'undefined' ? require('electron') : null;
   const ipc = electron?.ipcRenderer;
 
-  const toMB = bytes => (bytes / 1024 / 1024).toFixed(1);
+  // Batch parse all metadata in one IPC call (one round-trip instead of N)
+  console.log('Batch parsing metadata for', filePaths.length, 'files...');
+  const results = ipc
+    ? await ipc.invoke('batch-parse-metadata', filePaths)
+    : await window.electronAPI.batchParseMetadata(filePaths);
+
   let added = 0;
-  let totalSize = 0;
-  for (const filePath of filePaths) {
-    try {
-      // Read file as data URL (base64)
-      const dataUrl = ipc
-        ? await ipc.invoke('read-file-as-data-url', filePath)
-        : await window.electronAPI.readFileAsDataUrl(filePath);
-      if (!dataUrl) {
-        console.warn('readFileAsDataUrl returned null for:', filePath);
-        continue;
-      }
-
-      const metadata = ipc
-        ? await ipc.invoke('parse-metadata', filePath)
-        : await window.electronAPI.parseMetadata(filePath);
-
-      // Store data URL only if file < 5MB (base64 ~6.7MB); otherwise rely on filePath
-      const fileSizeBytes = dataUrl.length * 0.75; // approximate decoded size
-      totalSize += fileSizeBytes;
-      const src = fileSizeBytes < 5 * 1024 * 1024 ? dataUrl : null;
-
-      state.songs.push({
-        id: nextId++,
-        title: metadata.title,
-        artist: metadata.artist,
-        album: metadata.album,
-        duration: metadata.duration,
-        date: 'Just now',
-        color: '#333',
-        src: src,             // data: URL for small files, null for large ones
-        filePath: filePath,    // absolute path — always saved for re-reading
-        cover: metadata.cover,
-      });
-      added++;
-    } catch (err) {
-      console.warn('Failed to add:', filePath, err.message);
+  for (const r of results) {
+    if (!r.ok) {
+      console.warn('Failed:', r.filePath, r.error);
+      continue;
     }
+    state.songs.push({
+      id: nextId++,
+      title: r.title,
+      artist: r.artist,
+      album: r.album,
+      duration: r.duration,
+      date: 'Just now',
+      color: '#333',
+      src: null,           // lazy-loaded on play
+      filePath: r.filePath, // absolute path for re-reading
+      cover: r.cover,
+    });
+    added++;
   }
-  console.log(`Added ${added} songs, total size: ~${toMB(totalSize)}MB`);
 
   btn.innerHTML = '<i class="fas fa-plus-circle"></i><span class="nav-text">Add Songs</span>';
-  console.log('addMusicFilesElectron done, added:', added, 'total songs:', state.songs.length);
+  console.log(`Added ${added}/${filePaths.length} songs`);
   renderSongs();
-  saveState();       // Immediately save (don't wait for debounce)
-  console.log('saveState called from addMusicFilesElectron');
+  saveState();
   showToast(`Added ${added} song${added === 1 ? '' : 's'}`);
 }
 

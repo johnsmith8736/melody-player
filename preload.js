@@ -12,6 +12,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   parseMetadata: (filePath) => ipcRenderer.invoke('parse-metadata', filePath),
   onAppClosing: (callback) => ipcRenderer.on('app-closing', callback),
 
+  // Batch parse metadata for multiple files (much faster than one-by-one)
+  batchParseMetadata: (filePaths) => ipcRenderer.invoke('batch-parse-metadata', filePaths),
+
   // Debug
   debugReadFile: (filePath) => ipcRenderer.invoke('debug-read-file', filePath),
 
