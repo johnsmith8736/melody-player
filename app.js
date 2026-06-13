@@ -250,6 +250,10 @@ function removeSong(id) {
 async function playSong(song) {
   if (state.currentSong && state.currentSong.id === song.id) { togglePlay(); return; }
 
+  // Record play history
+  song.lastPlayed = Date.now();
+  saveState();
+
   state.currentSong = song;
   state.isPlaying = true;
   state.progress = 0;
@@ -690,11 +694,23 @@ function showAlbumView(album) {
 let recentSongs = [];
 
 function renderRecentView() {
-  // Show last 10 songs added
-  recentSongs = [...state.songs].sort((a, b) => {
-    if (a.id === b.id) return 0;
-    return a.id > b.id ? -1 : 1;
-  }).slice(0, 10);
+  // Show last 10 songs played (by lastPlayed timestamp), fallback to recently added
+  recentSongs = [...state.songs]
+    .filter(s => s.lastPlayed)
+    .sort((a, b) => {
+      const aTime = a.lastPlayed || 0;
+      const bTime = b.lastPlayed || 0;
+      return bTime - aTime;
+    })
+    .slice(0, 10);
+
+  // If no play history yet, show recently added songs as fallback
+  if (recentSongs.length === 0) {
+    recentSongs = [...state.songs].sort((a, b) => {
+      if (a.id === b.id) return 0;
+      return a.id > b.id ? -1 : 1;
+    }).slice(0, 10);
+  }
 
   const hasSongs = recentSongs.length > 0;
 
@@ -1941,7 +1957,7 @@ function setupSidebarResize() {
 // =============================================
 // PERSISTENCE — save / load state
 // =============================================
-function saveState() {
+async function saveState() {
   console.log('saveState() called, songs:', state.songs.length);
   try {
     // Save filePath for reloadable songs, src for browser-added files
@@ -1956,6 +1972,7 @@ function saveState() {
         color: s.color,
         cover: s.cover,
         filePath: s.filePath || null,
+        lastPlayed: s.lastPlayed || null,
       };
       // Only include src if it's a data URL (browser fallback), skip blob URLs
       // Also skip src if it's very large (>1MB) — we'll re-read from filePath on restart
@@ -1983,9 +2000,8 @@ function saveState() {
     if (typeof require !== 'undefined') {
       // Electron: use IPC to save to file (avoids localStorage null-byte corruption)
       const { ipcRenderer } = require('electron');
-      ipcRenderer.invoke('save-state-file', stateJson).then(r => {
-        if (!r.success) console.warn('save-state-file failed:', r.error);
-      });
+      const r = await ipcRenderer.invoke('save-state-file', stateJson);
+      if (!r.success) console.warn('save-state-file failed:', r.error);
     } else if (window.electronAPI?.saveStateFile) {
       window.electronAPI.saveStateFile(stateJson);
     } else {
@@ -2081,6 +2097,7 @@ async function loadState() {
               cover: meta.cover || s.cover || null,
               filePath: filePath,
               src: src,
+              lastPlayed: s.lastPlayed || null,
             });
           } catch (e) {
             console.warn('Failed to reload:', s.title, e.message);
@@ -2091,7 +2108,10 @@ async function loadState() {
         if (failed.length > 0) {
           console.warn('Failed to reload songs:', failed.join(', '));
         }
-        if (loaded.length > 0) state.songs = loaded;
+        state.songs = loaded;
+        if (loaded.length === 0 && data.songs.length > 0) {
+          showToast(`Failed to reload ${data.songs.length} saved songs (files may have been moved or deleted)`);
+        }
       } else {
         // Browser: no filePath support, songs lost on reload
         console.log('Browser mode: cannot reload songs from paths');
@@ -2165,9 +2185,9 @@ async function init() {
 
   // Register app-closing handler at top level (not just in library view)
   if (window.electronAPI) {
-    window.electronAPI.onAppClosing(() => {
+    window.electronAPI.onAppClosing(async () => {
       // Immediately save state (don't wait for debounce)
-      saveState();
+      await saveState();
     });
   }
 

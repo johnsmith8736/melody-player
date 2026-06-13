@@ -52,6 +52,7 @@
     "extraResources": []
   },
   "allowScripts": {
-    "electron@37": true
+    "electron@37": true,
+    "electron@37.10.3": true
   }
 }

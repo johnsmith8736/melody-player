@@ -22,7 +22,8 @@ npm run dist
 # Step 3: Create the source tarball for AUR
 echo "Creating source tarball..."
 cd "$SCRIPT_DIR"
-tar czf "melody-player-1.0.0.tar.gz" \
+PKGVER=$(grep '"version"' "$PROJECT_DIR/package.json" | head -1 | sed 's/.*"version": *"\([^"]*\)".*/\1/')
+tar czf "melody-player-${PKGVER}.tar.gz" \
     -C "$PROJECT_DIR" \
     --exclude='node_modules' \
     --exclude='dist' \
@@ -35,10 +36,5 @@ tar czf "melody-player-1.0.0.tar.gz" \
 
 echo ""
 echo "=== Done ==="
-echo "Source tarball: $SCRIPT_DIR/melody-player-1.0.0.tar.gz"
-echo "Pacman package: $PROJECT_DIR/dist/Melody-1.0.0-x64.pacman"
-echo ""
-echo "To upload to AUR:"
-echo "  1. Copy .SRCINFO and PKGBUILD to an AUR git repo"
-echo "  2. Run: makepkg --printsrcinfo > .SRCINFO"
-echo "  3. Commit and push: git add .SRCINFO PKGBUILD && git commit -m 'v1.0.0-2' && git push"
+echo "Source tarball: $SCRIPT_DIR/melody-player-${PKGVER}.tar.gz"
+echo "Pacman package: $PROJECT_DIR/dist/Melody-${PKGVER}-x64.pacman"
